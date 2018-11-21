@@ -26,8 +26,6 @@ parser.add_argument('--format', default='nt',
                     help="Output graph format for CONSTRUCT/DESCRIBE query results")
 args = parser.parse_args()
 
-sparql = """CONSTRUCT { ?term ?p ?o . ?o rdfs:label ?o2 . } WHERE { ?term ?p ?o . OPTIONAL { ?o rdfs:label ?o2 . } }"""
-
 # Load graph
 g = rdflib.Graph()
 g.parse(args.graph, format=args.graph_format)
