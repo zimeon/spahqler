@@ -8,9 +8,13 @@ see also:
 https://rdflib.readthedocs.io/en/stable/intro_to_sparql.html
 """
 import argparse
+from datetime import datetime
+import gzip
 import logging
+import pyparsing
 import rdflib
 import re
+import sys
 
 parser = argparse.ArgumentParser(description='Run SPARQL on a small local dataset.',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -20,15 +24,47 @@ parser.add_argument('--graph', '-g', required=True,
                     help='File name of graph data')
 parser.add_argument('--binding', '-b', default=[], action='append',
                     help='Initial variable bindings of the form x=<uri> or y="str"')
-parser.add_argument('--graph-format', default='nt',
+parser.add_argument('--graph-format', default='guess',
                     help='Format of graph data')
 parser.add_argument('--format', default='nt',
                     help="Output graph format for CONSTRUCT/DESCRIBE query results")
+parser.add_argument('--verbose', '-v', action='store_true',
+                    help="Verbose messages about progress and timing")
 args = parser.parse_args()
 
+logging.basicConfig(level=logging.INFO if args.verbose else logging.WARN)
+
 # Load graph
-g = rdflib.Graph()
-g.parse(args.graph, format=args.graph_format)
+dt = datetime.now()
+formats = {'nt': 5, 'turtle': 4, 'xml': 3}
+if args.graph_format == 'guess':
+    if args.graph.endswith('.ttl') or args.graph.endswith('.turtle'):
+        formats['turtle'] += 10
+    elif args.graph.endswith('.nt') or args.graph.endswith('.ntriples'):
+        formats['nt'] += 10
+    elif args.graph.endswith('.xml') or args.graph.endswith('.rdf'):
+        formats['xml'] += 10
+else:
+    formats = {args.graph_format: 1}
+for format in sorted(formats.keys(), key=lambda x: -formats[x]):
+    g = rdflib.Graph()
+    try:
+        if args.graph.endswith('.gz'):
+            fh = gzip.open(args.graph, 'rb')
+        else:
+            fh = open(args.graph, 'r')
+        g.parse(file=fh, format=format)
+    except Exception as e:
+        logging.warning("Parsing as %s failed: %s" % (format, str(e)))
+        g = None
+        continue
+    logging.info("Parsed as %s" % (format))
+    break
+if g is None:
+    logging.error("Failed to parse input graph %s, aborting!" % (args.graph))
+    sys.exit(1)
+dt2 = datetime.now()
+logging.info("Loaded graph of %d triples in %ss" % (len(g), (dt2 - dt)))
 
 # Get/load query
 if '{' in args.query:
@@ -46,9 +82,17 @@ for binding in args.binding:
     elif m.group(2) != m.group(4) and m.group(2) != '<' and m.group(4) != '>':
         raise Exception("Mismatching delimiters %s and %s in binding %s" % (m.group(2), m.group(4), binding))
     bindings[m.group(1)] = rdflib.Literal(m.group(3)) if m.group(2) == '"' else rdflib.URIRef(m.group(3))
+dt3 = datetime.now()
+logging.info("Loaded and parsed query and parameters in %ss" % (dt3 - dt2))
 
 # Run query
-res = g.query(query, initBindings=bindings)
+try:
+    res = g.query(query, initBindings=bindings)
+except pyparsing.ParseException as e:
+    logging.error("Failed to parse query: %s" % (str(e)))
+    sys.exit(1)
+dt4 = datetime.now()
+logging.info("Executed SPARQL query in %ss" % (dt4 - dt3))
 
 # Find result type
 if res.type == 'SELECT':
@@ -60,3 +104,5 @@ if res.type == 'SELECT':
 else:
     # Was CONSTRUCT/DESCRIBE -> triples
     print(res.serialize(encoding=None, format=args.format).decode('utf-8'))
+dt5 = datetime.now()
+logging.info("Wrote results in %ss" % (dt5 - dt4))
